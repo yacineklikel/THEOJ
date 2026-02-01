@@ -115,6 +115,7 @@ def iteration_t(M, Y_t,cout_intelligence, nu):
 
     Returns:
         np.array: Nouvelle distribution de la population à l'instant t+1 (Nx120).
+        np.array: Stratégie moyenne à l'instant t (taille 5).
     """
     sigma_t, mu_t = calculate_strat(M, Y_t)
     p_t = np.sum(Y_t, axis=1) @ mu_t  # Calcul de la stratégie moyenne p
@@ -123,7 +124,7 @@ def iteration_t(M, Y_t,cout_intelligence, nu):
     Y_t_plus_1 = np.clip(Y_t_plus_1, a_min=0, a_max=None)  # Évite les valeurs négatives
     somme_Y_t_plus_1 = np.sum(Y_t_plus_1)
     if somme_Y_t_plus_1 > 0:
-        return Y_t_plus_1 / somme_Y_t_plus_1  # Normalisation pour que la somme soit 1
+        return Y_t_plus_1 / somme_Y_t_plus_1, p_t # Normalisation pour que la somme soit 1
     else:
         raise ValueError("La somme de Y_t_plus_1 est nulle, impossible de normaliser.")
 
@@ -136,16 +137,21 @@ def run_simulation(M, Y_0, T, nu, cout_intelligence=np.zeros(N)):
         Y_0 (np.array): Distribution initiale de la population (Nx120).
         nu (float): Taux d'adaptation.
         T (int): Nombre d'itérations temporelles.
+        cout_intelligence (np.array): Coût associé à chaque niveau d'intelligence.
 
     Returns:
         list: Historique des distributions de la population à chaque instant t.
+
     """
     Y_t = Y_0
-    history = [Y_t]
+    history_Y = [Y_t]
+    history_p = []
     for t in range(T):
-        Y_t = iteration_t(M, Y_t, cout_intelligence, nu)
-        history.append(Y_t)
-    return history
+        Y_t, p_t = iteration_t(M, Y_t, cout_intelligence, nu)
+        history_Y.append(Y_t)
+        history_p.append(p_t)
+
+    return history_Y, history_p
 
     
     
