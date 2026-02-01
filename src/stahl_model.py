@@ -1,186 +1,151 @@
 import numpy as np
+import itertools
+import matplotlib.pyplot as plt
 
-class Game:
+
+M = np.array([
+                [1, 0, 0, 0, 0], 
+                [2, 2, 0, 0, 0], 
+                [3, 2, 3, 1, 0],
+                [4, 4, 4, 3, 1], # S3 (Le piège attractif)
+                [0, 1, 2, 4, 6]  # le 4 dans la 4ememcolone permet de rendre cette strat meilleure que celle juste au essus 
+            ])
+
+cardE = M.shape[0]
+PREFERENCES_TABLE = np.array( list(itertools.permutations(np.arange(cardE))) )
+                                                # Exemple d'accès
+                                                # k = 0 -> (0, 1, 2, 3, 4)
+                                                # k = 119 -> (4, 3, 2, 1, 0)
+Nb_preferences2 = len(PREFERENCES_TABLE)
+N = 4 # Nombre de niveaux d'intelligence
+
+def calculer_sigma_n(p_inf_n, M, preferences_table):
     """
-    Définit le jeu symétrique 3x3.
-    Je l'ai mise sous forme d'une classe pour faire propre mais en vrai cest jjuste la matrice du jeu
-    sous la forme d'un array numpy avec une method pour acceder a l'elelement [i,j].
+    Détermine les choix individuels (sigma) pour un niveau d'intelligence n donné.
+    
+    1. Calcule l'espérance de gain contre les joueurs moins intelligents (p_inf_n).
+    2. Identifie les stratégies rationnelles (Rn).
+    3. Sélectionne pour chaque type k la meilleure stratégie disponible dans Rn.
+
+    Args:
+        p_inf_n (np.array): Vecteur de probabilité (taille 5) représentant le jeu moyen des niveaux < n.
+        M (np.array): Matrice des gains (5x5).
+        preferences_table (np.array): Matrice (120x5) des ordres de préférence.
+
+    Returns:
+        sigma_n (np.array): Vecteur (taille 120) contenant l'action choisie par chaque type k.
+        strategies_rationnelles (list): Liste des actions valides pour ce tour intitulee Rn dans l'article.
     """
-    def __init__(self):
-        self.payoff_matrix = np.array([
-            [0, 1, 0], 
-            [1, 2, 0],
-            [2, 2, 4]
-        ])
-        
-    def get_payoff(self, strategy_p1, strategy_p2):
-        return self.payoff_matrix[strategy_p1, strategy_p2]
+    esperance_gains = M @ p_inf_n
+    
+    gain_max = np.max(esperance_gains)
+    strategies_rationnelles = np.where(np.isclose(esperance_gains, gain_max))[0] #Cest Rn dans le papier
+    
+    mask_valides = np.zeros(M.shape[0], dtype=bool)
+    mask_valides[strategies_rationnelles] = True
+    matrice_validite = mask_valides[preferences_table]
+    indices_meilleurs_choix = np.argmax(matrice_validite, axis=1)
+    sigma_n = preferences_table[np.arange(preferences_table.shape[0]), indices_meilleurs_choix]
+    
+    return sigma_n, strategies_rationnelles
 
-class Population:
+
+def calculer_moyenne_choix_opti(densite_k, strategies_rationnelles):
     """
-    Gère la dynamique de la population et les différents types de joueurs.
+    Calcule la distribution des actions jouées par ce niveau d'intelligence.
+
+    Pour chaque type de préférence (k), la fonction sélectionne la meilleure action 
+    disponible parmi les stratégies rationnelles (Rn), puis agrège les résultats.
+
+    Args:
+        densite_k (array): Proportion de chaque type de préférence dans la population (taille 120).
+        strategies_rationnelles (list): Liste des actions valides pour ce tour.
+
+    Returns:
+        array: Vecteur de probabilités (taille 5) représentant la fréquence de chaque action.
     """
-    def __init__(self, game):
-        self.game = game
-        self.types = [] # Liste des objets PlayerType
-        self.proportions = [] # Liste des proportions actuelles (somme = 1)
-        
-    def add_type(self, player_type, initial_proportion):
-        self.types.append(player_type)
-        self.proportions.append(initial_proportion)
-        
-    def normalize_proportions(self):
-        """Assure que la somme des proportions = 1"""
-        total = sum(self.proportions)
-        self.proportions = [p / total for p in self.proportions]
+    mask_actions = np.zeros(5, dtype=bool)
+    mask_actions[list(strategies_rationnelles)] = True
+    matrix_valid = mask_actions[PREFERENCES_TABLE]
+    best_choice_indices = np.argmax(matrix_valid, axis=1)
+    
+    final_actions = PREFERENCES_TABLE[np.arange(120), best_choice_indices]
 
-    def get_population_strategy_distribution(self):
-        """
-        Calcule la probabilité globale qu'une stratégie (0, 1 ou 2) soit jouée
-        par l'ensemble de la population actuelle.
-        Retourne un vecteur [prob_S0, prob_S1, prob_S2]
-        """
-        n_strategies = self.game.payoff_matrix.shape[0]
-        distribution = np.zeros(n_strategies)
-        
-        for idx, p_type in enumerate(self.types):
-            # Récupère la probabilité que ce type joue chaque stratégie
-            # Note: Pour Smart_0 c'est fixe, pour Smart_n ça dépend de ses calculs
-            strat_probs = p_type.get_strategy_distribution(self.proportions, self.types)
-            distribution += self.proportions[idx] * strat_probs
-            
-        return distribution
+    distribution = np.bincount(final_actions, weights=densite_k, minlength=5)
 
-    def step_evolution(self, dt=0.1):
-        """
-        Exécute un pas de temps de la dynamique de réplication (Eq 4 de Stahl).
-        """
-        current_proportions = np.array(self.proportions)
-        n_types = len(self.types)
-        fitnesses = np.zeros(n_types)
-        
-        # 1. Calculer la distribution globale des stratégies jouées dans la population
-        pop_distribution = self.get_population_strategy_distribution()
-        
-        # 2. Calculer le Fitness (Gain espéré) pour chaque TYPE de joueur
-        for i, p_type in enumerate(self.types):
-            # Le gain dépend de sa stratégie face à la distribution de la population
-            # Moins le coût cognitif
-            my_strat_dist = p_type.get_strategy_distribution(self.proportions, self.types)
-            
-            # Gain brut = Somme(Ma_prob_jouer_S * Prob_Autre_jouer_S' * Gain(S, S'))
-            gross_payoff = 0
-            for s_mine in range(3):
-                for s_other in range(3):
-                    gross_payoff += (my_strat_dist[s_mine] * pop_distribution[s_other] * self.game.payoff_matrix[s_mine, s_other])
-            
-            fitnesses[i] = gross_payoff - p_type.cost
+    total_masse = distribution.sum()
+    return distribution / total_masse if total_masse > 0 else distribution
 
-        # 3. Calculer le Fitness moyen de la population
-        avg_fitness = np.dot(current_proportions, fitnesses)
-        
-        # 4. Mise à jour des proportions (Équation de réplication)
-        # dy/dt = y * (fitness - avg_fitness)
-        new_proportions = np.zeros(n_types)
-        for i in range(n_types):
-            change = current_proportions[i] * (fitnesses[i] - avg_fitness)
-            new_proportions[i] = current_proportions[i] + change * dt
-            
-        # Sécurité pour éviter les valeurs négatives ou > 1 dues à l'approximation discrète
-        new_proportions = np.clip(new_proportions, 0.0001, 1.0) 
-        
-        # Mise à jour et normalisation
-        self.proportions = list(new_proportions)
-        self.normalize_proportions()
-        
-        return self.proportions
 
-class PlayerType:
-    def __init__(self, name, level, cost=0, fixed_strategy=None):
-        self.name = name
-        self.level = level # 0, 1, 2...
-        self.cost = cost
-        self.fixed_strategy = fixed_strategy # Uniquement pour Smart_0
-        
-    def get_strategy_distribution(self, population_shares, player_types):
-        """
-        Retourne un vecteur [p0, p1, p2] indiquant la probabilité de jouer chaque coup.
-        """
-        # --- NIVEAU 0 : Joue une stratégie fixe ---
-        if self.level == 0:
-            dist = np.zeros(3)
-            dist[self.fixed_strategy] = 1.0
-            return dist
-            
-        # --- NIVEAU 1 : Best Response à la distribution visible ---
-        # Stahl suppose que Smart_n croit que tout le monde est < n.
-        # Pour simplifier ici (modèle standard), Smart_1 réagit à la population réelle observée.
-        
-        # 1. Estimer ce que jouent les autres
-        # Pour Smart_1, on regarde la distribution agrégée des stratégies
-        total_dist = np.zeros(3)
-        # On recalcule la distribution globale (approximation simplifiée pour éviter récursion infinie)
-        # Dans un modèle pur Stahl, Smart_n utilise une croyance Bayesienne sur les types n-1.
-        # Ici, version "Best Response Dynamics" classique pour vulgarisation.
-        
-        if self.level >= 1:
-            # Calcul des gains espérés pour chaque coup (0, 1, 2)
-            expected_payoffs = np.zeros(3)
-            
-            # Reconstruction de la perception de la population
-            # (Pour simplifier le code, on passe la vraie distribution ici)
-            # Dans une implémentation stricte, il faudrait passer l'objet Game et recalculer
-            pass 
-            
-        # NOTE : Pour garder le code simple et fonctionnel pour le mémoire,
-        # nous allons coder "en dur" la logique Best Response pour ce jeu 3x3 spécifique
-        # car calculer dynamiquement la récursion Smart_n est complexe en Python pur.
-        
-        return self._compute_best_response_logic(population_shares, player_types)
 
-    def _compute_best_response_logic(self, shares, types):
-        """Logique de décision simplifiée pour la simulation"""
-        # On calcule ce que joue la population en moyenne
-        pop_play = np.zeros(3)
-        for idx, t in enumerate(types):
-            # Pour éviter la récursion infinie, on considère que les autres Smart 
-            # jouent leur stratégie "préférée" ou aléatoire à l'instant t-1
-            # Ici on triche un peu pour la stabilité : on regarde les Smart_0
-            if t.level == 0:
-                pop_play[t.fixed_strategy] += shares[idx]
-            else:
-                # On assume que les autres smarts jouent uniformément si on ne sait pas
-                pop_play += (shares[idx] / 3.0) 
-        
-        # Matrice G
-        # [0, 1, 0]
-        # [1, 2, 0]
-        # [2, 2, 4]
-        
-        # Gain espéré de jouer 0: 0*P0 + 1*P1 + 0*P2
-        # Gain espéré de jouer 1: 1*P0 + 2*P1 + 0*P2
-        # Gain espéré de jouer 2: 2*P0 + 2*P1 + 4*P2
-        
-        gains = [
-            0*pop_play[0] + 1*pop_play[1] + 0*pop_play[2],
-            1*pop_play[0] + 2*pop_play[1] + 0*pop_play[2],
-            2*pop_play[0] + 2*pop_play[1] + 4*pop_play[2]
-        ]
-        
-        # Si je suis Smart_2, j'anticipe que les Smart_1 vont jouer la Best Response
-        if self.level == 2:
-            # Smart 2 pense que les autres vont jouer le MAX des gains ci-dessus
-            best_strat_others = np.argmax(gains)
-            # Ma réponse est la meilleure réponse à best_strat_others
-            # Si autres jouent 0 -> Je joue 2 (gain 2)
-            # Si autres jouent 1 -> Je joue 1 ou 2 (gain 2) -> disons 2 pour Nash
-            # Si autres jouent 2 -> Je joue 2 (gain 4)
-            # Dans cette matrice spécifique, 2 est dominant ou Nash presque partout.
-            final_strat = 2 
-        else:
-            # Smart 1 joue juste le max immédiat
-            final_strat = np.argmax(gains)
-            
-        dist = np.zeros(3)
-        dist[final_strat] = 1.0
-        return dist
+def calculate_strat(M, Y):
+    """
+    Calcul quelle strat est optimale pour tout n et tout k.
+    On boucle sur n car le choix des petits n influence le choix des plus gros n
+    Args:
+        M (np.array): Forme matricielle du jeu.
+        Y (np.array): Distribution de la population a l'instant du calcul.
+    Returns:
+        np.array: Matrice des decisions rationnelles sigma(n,k).
+        np.array: Matrice des distributions moyennes mu(n).
+    """
+    s = np.sum(Y, axis=1)  # repartition demographique par niveau d'intelligence
+    s = s[:, np.newaxis] # colonnes redoncantes pour simplifier les calculs
+    sigma = np.zeros((N, Nb_preferences2), dtype=int) #cest un choix dans {0,.., 5}
+    mu = np.zeros((N, cardE)) #demographie resultante des choix des moins intelligents. Se remplit au fr ur et a mesure
+    
+    mu[0,:]=calculer_moyenne_choix_opti(Y[0,:], range(cardE))  # niveau 0, choix sans reflexion
+    sigma[0,:] = np.array([PREFERENCES_TABLE[k][0] for k in range(Nb_preferences2)])  # choix des niveau 0, toujours la meilleure action selon leur preference
+    for n in range(1,N): # on commence par les moisn smart (1) car les 0 reflechissent pas 
+        p_inf_n = np.sum(mu[:n]*s[:n], axis=0) / np.sum(s[:n]) #on calcule la strat moyenne des joueurs moins intelligents que n
+        sigma[n,:], Rn = calculer_sigma_n(p_inf_n, M, PREFERENCES_TABLE)
+        mu[n, :] = calculer_moyenne_choix_opti(Y[n, :], Rn)
+    return sigma, mu
+
+
+def iteration_t(M, Y_t,cout_intelligence, nu):
+    """
+    Effectue une itération temporelle du modèle de Stahl.
+
+    Args:
+        M (np.array): Matrice des gains (5x5).
+        Y_t (np.array): Distribution de la population à l'instant t (Nx120).
+        cout_intelligence (np.array): Coût associé à chaque niveau d'intelligence.
+        nu (float): Taux d'adaptation.
+
+    Returns:
+        np.array: Nouvelle distribution de la population à l'instant t+1 (Nx120).
+    """
+    sigma_t, mu_t = calculate_strat(M, Y_t)
+    p_t = np.sum(Y_t, axis=1) @ mu_t  # Calcul de la stratégie moyenne p
+    M_barre = np.transpose(p_t) @ M @ p_t  # Gain moyen dans la population
+    Y_t_plus_1 = Y_t * ( 1 + nu * ( (M@p_t)[sigma_t] - M_barre - cout_intelligence[:, np.newaxis]) )
+    Y_t_plus_1 = np.clip(Y_t_plus_1, a_min=0, a_max=None)  # Évite les valeurs négatives
+    somme_Y_t_plus_1 = np.sum(Y_t_plus_1)
+    if somme_Y_t_plus_1 > 0:
+        return Y_t_plus_1 / somme_Y_t_plus_1  # Normalisation pour que la somme soit 1
+    else:
+        raise ValueError("La somme de Y_t_plus_1 est nulle, impossible de normaliser.")
+
+def run_simulation(M, Y_0, T, nu, cout_intelligence=np.zeros(N)):
+    """
+    Exécute la simulation du modèle de Stahl sur T itérations.
+
+    Args:
+        M (np.array): Matrice des gains (5x5).
+        Y_0 (np.array): Distribution initiale de la population (Nx120).
+        nu (float): Taux d'adaptation.
+        T (int): Nombre d'itérations temporelles.
+
+    Returns:
+        list: Historique des distributions de la population à chaque instant t.
+    """
+    Y_t = Y_0
+    history = [Y_t]
+    for t in range(T):
+        Y_t = iteration_t(M, Y_t, cout_intelligence, nu)
+        history.append(Y_t)
+    return history
+
+    
+    
